@@ -5,6 +5,7 @@ import qualified Data.Vector.Unboxed.Mutable as MV
 import Data.Word (Word16)
 import Data.Bits
 import Control.Monad
+import Control.Applicative ((<$>))
 import Text.Printf
 
 screenWidth = 128
@@ -36,19 +37,19 @@ newState :: IO CpuState
 newState = do
     mem <- MV.new memorySize
     regs <- MV.new regCount
-    return $ CpuState {memory = mem, regs = regs }
+    return CpuState {memory = mem, regs = regs }
 
 readMemory :: CpuState -> Int -> IO Word16
-readMemory CpuState {memory = memory} addr = MV.read memory addr
+readMemory CpuState {memory = memory} = MV.read memory
 
 writeMemory :: CpuState -> Int -> Word16 -> IO ()
-writeMemory CpuState {memory = memory} addr value = MV.write memory addr value
+writeMemory CpuState {memory = memory} = MV.write memory
 
 readRegister :: CpuState -> Reg -> IO Word16
 readRegister CpuState {regs = regs} reg = MV.read regs (fromEnum reg)
 
 writeRegister :: CpuState -> Reg -> Word16 -> IO ()
-writeRegister CpuState {regs = regs} reg value = MV.write regs (fromEnum reg) value
+writeRegister CpuState {regs = regs} reg = MV.write regs (fromEnum reg)
 
 stepPC :: CpuState -> IO Word16
 stepPC cpu = do
@@ -114,7 +115,7 @@ readValue cpu w = do
     case w of
         w | w <= 0x07 -> return $ ValueReg $ reg w
         w | w <= 0x0f -> return $ ValueAddrReg $ reg $ w - 0x08
-        w | w <= 0x17 -> withNextWord cpu (\n -> ValueAddrRegPlus (reg $ w - 0x10) n)
+        w | w <= 0x17 -> withNextWord cpu $ ValueAddrRegPlus (reg $ w - 0x10)
         0x18 -> return ValuePop
         0x19 -> return ValuePeek
         0x1a -> return ValuePush
@@ -123,7 +124,7 @@ readValue cpu w = do
         0x1d -> return ValueO
         0x1e -> withNextWord cpu ValueAddr
         0x1f -> withNextWord cpu ValueLit
-        w | w <= 0x3f -> return (ValueLit (w - 0x20))
+        w | w <= 0x3f -> return $ ValueLit (w - 0x20)
         _ -> fail "readValue: wrong value"
 
 readInstr :: CpuState -> IO InstrItem
@@ -215,8 +216,8 @@ evalInstr cpu (Ifb, a, b) = evalIfInstr cpu a b (\a b -> (a .&. b) /= 0)
 
 evalArithInstr :: CpuState -> Value -> Value -> (Int -> Int -> (Int, Int)) -> IO ()
 evalArithInstr cpu a b op = do
-    aa <- fmap fromIntegral $ getValue cpu a
-    bb <- fmap fromIntegral $ getValue cpu b
+    aa <- fromIntegral <$> getValue cpu a
+    bb <- fromIntegral <$> getValue cpu b
     let (result, ex) = op aa bb
     writeRegister cpu RegEx $ fromIntegral ex
     setValue cpu a $ fromIntegral result
@@ -225,9 +226,7 @@ evalIfInstr :: CpuState -> Value -> Value -> (Word16 -> Word16 -> Bool) -> IO ()
 evalIfInstr cpu a b op = do
     aa <- getValue cpu a
     bb <- getValue cpu b
-    if op aa bb
-        then return ()
-        else readInstr cpu >> return ()
+    unless (op aa bb) $ void $ readInstr cpu
 
 testProg :: [Word16]
 testProg = [
@@ -246,10 +245,10 @@ test = do
     writeMemoryBlock cpu testProg
     dump cpu
     forM_ [1..200] (\i -> do
-        putStrLn $ "Step " ++ (show i)
+        putStrLn $ "Step " ++ show i
         instr <- readInstr cpu
         evalInstr cpu instr
-        putStrLn $ show instr
+        print instr
         dump cpu)
     return cpu
 
@@ -284,4 +283,4 @@ dump cpu = do
     
 
 main :: IO ()
-main = test >> return ()
+main = void test
