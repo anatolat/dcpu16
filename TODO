@@ -1,3 +1,6 @@
- - instruction parsing
- - basic instructions
- - assembler
+- upload on github
+- implement other instructions
+- assembler
+- vm monad
+- code cleanup
+- graphics
