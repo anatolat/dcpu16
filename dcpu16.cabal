@@ -27,6 +27,7 @@ executable dcpu16-exe
                      , dcpu16
                      , sdl2
                      , vector
+                     , bytestring
   default-language:    Haskell2010
 
 test-suite dcpu16-test

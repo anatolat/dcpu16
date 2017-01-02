@@ -1,15 +1,31 @@
+{-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE OverloadedStrings #-}
 module Main where
 
-import qualified Data.Vector.Unboxed.Mutable as MV
-import Data.Word (Word16)
+import qualified Data.Vector.Storable.Mutable as MV
+import qualified Data.Vector.Storable as SV 
+import qualified Data.Vector as V
+import qualified Data.Vector.Generic as GV
+import Data.Word
 import Data.Bits
 import Control.Monad
 import Control.Applicative ((<$>))
 import Text.Printf
+import qualified Data.ByteString as BS
+import qualified Data.ByteString.Internal as BS
 
-screenWidth = 128
-screenHeight = 96
+import qualified Foreign.Storable as FS
+import qualified Foreign.ForeignPtr as FP
+
+import qualified SDL
+import Control.Concurrent (threadDelay)
+
+import Data.IORef -- temp
+
+screenWidth = 128 :: Int
+screenHeight = 96 :: Int 
+screenScale = 4   :: Int
+gfxStart = 0x8000
 
 memorySize = 0x10000
 
@@ -99,7 +115,7 @@ data Value = ValueReg Reg           -- register
 type InstrItem = (Instr, Value, Value)
 
 parseInstrParts :: Word16 -> (Word16, Word16, Word16)
-parseInstrParts w = if oo == 0 then (aa, bb, 0) else (oo, aa, bb)
+parseInstrParts w = if oo == 0 then (aa + 0xf, bb, 0) else (oo, aa, bb)
 -- a basic instruction format:    bbbbbbaaaaaaoooo
 -- a non-basic insruction format: aaaaaaoooooo0000
     where (oo, aa, bb) = (w .&. 0xf, (w `shiftR` 4) .&. 0x3f, (w `shiftR` 10) .&. 0x3f)
@@ -202,16 +218,25 @@ evalInstr cpu (Mul, a, b) = evalArithInstr cpu a b op
     where op a b = let res = a * b in (res, (res `shiftR` 16) .&. 0xffff)
 evalInstr cpu (Div, a, b) = evalArithInstr cpu a b op
     where op a b = if b == 0 then (0, 0) else (a`div`b, ((a `shiftL` 16) `div` b) .&. 0xffff)
-evalInstr cpu (Mod, a, b) = undefined
-evalInstr cpu (Shl, a, b) = undefined
-evalInstr cpu (Shr, a, b) = undefined
-evalInstr cpu (And, a, b) = undefined
-evalInstr cpu (Bor, a, b) = undefined
-evalInstr cpu (Xor, a, b) = undefined
+evalInstr cpu (Mod, a, b) = evalArithInstr cpu a b op
+    where op a b = if b == 0 then (0, -1) else (a`mod`b, -1)
+evalInstr cpu (Shl, a, b) = evalArithInstr cpu a b op
+    where op a b = let res = a `shiftL` b in (res, (res `shiftR` 16) .&. 0xffff)
+evalInstr cpu (Shr, a, b) = evalArithInstr cpu a b op
+    where op a b = let res = a `shiftR` b in (res, ((res `shiftL` 16) `shiftR` b).&. 0xffff)
+evalInstr cpu (And, a, b) = evalArithInstr cpu a b op
+    where op a b = if b == 0 then (0, -1) else (a .&. b, -1)
+evalInstr cpu (Bor, a, b) = evalArithInstr cpu a b op
+    where op a b = if b == 0 then (0, -1) else (a .|. b, -1)
+evalInstr cpu (Xor, a, b) = evalArithInstr cpu a b op
+    where op a b = if b == 0 then (0, -1) else (a `xor` b, -1)
 evalInstr cpu (Ife, a, b) = evalIfInstr cpu a b (==)
 evalInstr cpu (Ifn, a, b) = evalIfInstr cpu a b (/=)
 evalInstr cpu (Ifg, a, b) = evalIfInstr cpu a b (>)
 evalInstr cpu (Ifb, a, b) = evalIfInstr cpu a b (\a b -> (a .&. b) /= 0)
+evalInstr cpu (Jsr, a, _) = do
+    evalInstr cpu (Set, ValuePush, ValuePC)
+    evalInstr cpu (Set, ValuePC, a)
 
 
 evalArithInstr :: CpuState -> Value -> Value -> (Int -> Int -> (Int, Int)) -> IO ()
@@ -219,7 +244,7 @@ evalArithInstr cpu a b op = do
     aa <- fromIntegral <$> getValue cpu a
     bb <- fromIntegral <$> getValue cpu b
     let (result, ex) = op aa bb
-    writeRegister cpu RegEx $ fromIntegral ex
+    when (ex >= 0) $ writeRegister cpu RegEx $ fromIntegral ex
     setValue cpu a $ fromIntegral result
 
 evalIfInstr :: CpuState -> Value -> Value -> (Word16 -> Word16 -> Bool) -> IO ()
@@ -239,18 +264,21 @@ writeMemoryBlock :: CpuState -> [Word16] -> IO ()
 writeMemoryBlock cpu arr = 
     forM_ (zip [0..] arr) (\(i, w) -> writeMemory cpu i w)
 
-test :: IO CpuState
-test = do
+loadBinProg :: CpuState -> FilePath -> IO ()
+loadBinProg cpu path = do  
+    bs <- BS.readFile path
+    writeMemoryBlock cpu $ bytesToWords $ BS.unpack bs
+
+start :: IO CpuState
+start = do
     cpu <- newState
-    writeMemoryBlock cpu testProg
-    dump cpu
-    forM_ [1..200] (\i -> do
-        putStrLn $ "Step " ++ show i
-        instr <- readInstr cpu
-        evalInstr cpu instr
-        print instr
-        dump cpu)
+    loadBinProg cpu "pacman-1.1.bin"
     return cpu
+
+run :: CpuState -> IO ()
+run cpu = do
+    instr <- readInstr cpu
+    evalInstr cpu instr    
 
 dumpMemLine :: CpuState -> Int -> IO ()
 dumpMemLine cpu addr = do
@@ -280,7 +308,89 @@ dump cpu = do
     putStrLn "\nMemory dump:"
     dumpMemPage cpu 0
     putStrLn ""
+
+pallete :: SV.Vector Word32
+pallete = SV.fromList 
+            [ 0x000000FF, 0x1B2632FF, 0x493C2BFF, 0x2F484EFF
+            , 0x005784FF, 0xBE2633FF, 0x44891AFF, 0xA46422FF
+            , 0x31A2F2FF, 0xE06F8BFF, 0xEB8931FF, 0x9D9D9DFF
+            , 0xA3CE27FF, 0xB2DCEFFF, 0xFFE26BFF, 0xFFFFFFFF]
+
+writeTexturePixel :: (MV.IOVector Word32) -> Int -> Int -> Word16 -> IO ()
+writeTexturePixel screen x y pixel = do
+    let color = pallete SV.! (fromIntegral pixel)
+    MV.write screen (y * screenWidth + x) color
+
+drawBg :: CpuState -> (MV.IOVector Word32) -> IO ()
+drawBg cpu screen = do
+    let yx = [(y, x) | y <- [0..screenHeight-1], x <- [0..screenWidth-1]]
+    forM_ yx (\(y, x) -> do
+        let addr = gfxStart + x `div` 3 + (y `div` 3) * (screenWidth `div` 3)
+        w <- readMemory cpu addr
+        let c1 = w `shiftR` 12
+        let c2 = (w `shiftR` 8) .&. 0xf
+        let idx = x `mod` 3 + (y `mod` 3) * 3
+        let b = w .&. (0x80 `shiftR` idx)
+        writeTexturePixel screen x y (if b /= 0 then c1 else c2)
+        return ())
+
+updateScreen :: CpuState -> (MV.IOVector Word32) -> IO ()
+updateScreen = drawBg
+
+sizeOfElem :: forall a m. (FS.Storable a) => (MV.MVector m a) -> Int
+sizeOfElem vec = FS.sizeOf (undefined :: a)
+
+mvectorToByteString :: (FS.Storable a) => MV.IOVector a -> BS.ByteString
+mvectorToByteString vec
+  = BS.fromForeignPtr (FP.castForeignPtr fptr) (scale off) (scale len)  where
+    (fptr, off, len) = MV.unsafeToForeignPtr vec
+    scale = (* sizeOfElem vec)
     
+mainLoop :: IO ()
+mainLoop = do
+    SDL.initialize [SDL.InitVideo]
+
+    let windowSize = SDL.V2 (fromIntegral screenWidth) (fromIntegral screenHeight)
+    let windowConfig = SDL.defaultWindow { SDL.windowInitialSize = windowSize }
+    window <- SDL.createWindow "DCPU-16" windowConfig
+    SDL.showWindow window
+
+    renderer <- SDL.createRenderer window (-1) SDL.defaultRenderer
+    texture <- SDL.createTexture renderer SDL.RGBA8888 SDL.TextureAccessStreaming windowSize
+
+    cpu <- start
+    screenBuf <- MV.new (screenWidth * screenHeight)
+    counter <- newIORef 0 :: IO (IORef Int)
+
+    let loop = do
+            events <- SDL.pollEvents
+            let quit = elem SDL.QuitEvent $ map SDL.eventPayload events
+            modifyIORef counter (+1)
+            counterValue <- readIORef counter
+            putStrLn $ "Step " ++ show counterValue
+            run cpu
+            updateScreen cpu screenBuf
+
+            let screenBs = mvectorToByteString screenBuf
+            SDL.updateTexture texture Nothing screenBs (fromIntegral $ screenWidth * 4)
+
+            SDL.copy renderer texture Nothing Nothing
+            SDL.present renderer
+
+            unless quit loop
+    loop
+
+    SDL.destroyWindow window
+    SDL.quit
+
+toWord16 :: Word8 -> Word8 -> Word16
+toWord16 lsb msb = (fromIntegral lsb .|. ((fromIntegral msb) `shiftL` 8))
+
+bytesToWords :: [Word8] -> [Word16]
+bytesToWords = go
+    where go [] = []
+          go (x:y:xs) = toWord16 x y : go xs
+          
 
 main :: IO ()
-main = void test
+main = mainLoop
