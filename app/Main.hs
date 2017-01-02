@@ -4,8 +4,6 @@ module Main where
 
 import qualified Data.Vector.Storable.Mutable as MV
 import qualified Data.Vector.Storable as SV 
-import qualified Data.Vector as V
-import qualified Data.Vector.Generic as GV
 import Data.Word
 import Data.Bits
 import Control.Monad
@@ -18,7 +16,6 @@ import qualified Foreign.Storable as FS
 import qualified Foreign.ForeignPtr as FP
 
 import qualified SDL
-import Control.Concurrent (threadDelay)
 
 import Data.IORef -- temp
 
@@ -316,12 +313,12 @@ pallete = SV.fromList
             , 0x31A2F2FF, 0xE06F8BFF, 0xEB8931FF, 0x9D9D9DFF
             , 0xA3CE27FF, 0xB2DCEFFF, 0xFFE26BFF, 0xFFFFFFFF]
 
-writeTexturePixel :: (MV.IOVector Word32) -> Int -> Int -> Word16 -> IO ()
+writeTexturePixel :: MV.IOVector Word32 -> Int -> Int -> Word16 -> IO ()
 writeTexturePixel screen x y pixel = do
-    let color = pallete SV.! (fromIntegral pixel)
+    let color = pallete SV.! fromIntegral pixel
     MV.write screen (y * screenWidth + x) color
 
-drawBg :: CpuState -> (MV.IOVector Word32) -> IO ()
+drawBg :: CpuState -> MV.IOVector Word32 -> IO ()
 drawBg cpu screen = do
     let yx = [(y, x) | y <- [0..screenHeight-1], x <- [0..screenWidth-1]]
     forM_ yx (\(y, x) -> do
@@ -334,10 +331,10 @@ drawBg cpu screen = do
         writeTexturePixel screen x y (if b /= 0 then c1 else c2)
         return ())
 
-updateScreen :: CpuState -> (MV.IOVector Word32) -> IO ()
+updateScreen :: CpuState -> MV.IOVector Word32 -> IO ()
 updateScreen = drawBg
 
-sizeOfElem :: forall a m. (FS.Storable a) => (MV.MVector m a) -> Int
+sizeOfElem :: forall a m. (FS.Storable a) => MV.MVector m a -> Int
 sizeOfElem vec = FS.sizeOf (undefined :: a)
 
 mvectorToByteString :: (FS.Storable a) => MV.IOVector a -> BS.ByteString
@@ -384,7 +381,7 @@ mainLoop = do
     SDL.quit
 
 toWord16 :: Word8 -> Word8 -> Word16
-toWord16 lsb msb = (fromIntegral lsb .|. ((fromIntegral msb) `shiftL` 8))
+toWord16 lsb msb = fromIntegral lsb .|. (fromIntegral msb `shiftL` 8)
 
 bytesToWords :: [Word8] -> [Word16]
 bytesToWords = go
