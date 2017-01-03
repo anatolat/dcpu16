@@ -1,6 +1,5 @@
--- draw sprites
--- scaling
+-- fix drawing
 -- assembler
-- vm monad
-- code cleanup
-- graphics
+-- vm monad
+-- code cleanup
+-- keyboard

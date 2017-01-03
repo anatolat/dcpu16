@@ -1,0 +1,36 @@
+This is a theoretical sprite spec for a DCPU16 machine
+It requires 32 words for sprite registers. 
+The location of those registers is deliberately left undefined, because they are not relevant to the sprite design itself.
+
+16 sprites
+
+Each sprite has two control words
+
+first control word is 
+XXXXXXXXYYYYYYYY 
+   8 bits X position 
+   8 bits Y Position.
+
+Second control word is
+MMCCCCAAAAAAAAAA
+   2 bits Sprite Mode allowing 4 sprite modes
+   4 bits Colour info (meaning depends on sprite mode)
+   10 bits for sprite data address 
+      Sprite data is at 1000 0AAA AAAA AAA0
+      Which is to say 0x8000 + (A << 1)
+
+4 sprite modes
+   Sprite Mode 0:  8x8  15 colour sprite with transparancy
+      Sprite data is 4 bits per pixel, two machine words per line
+      color info indicates which colour index is transparent
+
+   Sprite Mode 1:  16x8  3 colour sprite with Transparancy
+      Sprite data is 2 bits per pixel two machine words per line
+      
+   Sprite Mode 2:  8x16  3 colour sprite with Transparancy
+      Sprite data is 2 bits per pixel one machine word per line
+    
+   Sprite Mode 3:  16x16  1 colour plus Transparancy
+      Sprite Data is 1 bit per pixel one machine word per line
+      ZERO bits are transparent,  ONE bits are the colour indicated
+      by colour info

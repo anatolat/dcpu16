@@ -23,6 +23,8 @@ screenWidth = 128 :: Int
 screenHeight = 96 :: Int 
 screenScale = 4   :: Int
 gfxStart = 0x8000
+spritesStart = 0x9050
+spriteCount = 16
 
 memorySize = 0x10000
 
@@ -70,13 +72,6 @@ stepPC cpu = do
     result <- readMemory cpu (fromIntegral addr)
     writeRegister cpu RegPC (addr + 1)
     return result
-
-stepCPU :: CpuState -> IO CpuState
-stepCPU = undefined
---stepCPU cpu = do
---    instrWord <- stepPC
---    return cpu
-
 
 data Instr = Set
            | Add
@@ -269,7 +264,7 @@ loadBinProg cpu path = do
 start :: IO CpuState
 start = do
     cpu <- newState
-    loadBinProg cpu "pacman-1.1.bin"
+    loadBinProg cpu "tests/pacman-1.1.bin"
     return cpu
 
 run :: CpuState -> IO ()
@@ -318,21 +313,63 @@ writeTexturePixel screen x y pixel = do
     let color = pallete SV.! fromIntegral pixel
     MV.write screen (y * screenWidth + x) color
 
+drawBgPixel :: CpuState -> MV.IOVector Word32 -> Int -> Int -> IO ()
+drawBgPixel cpu screen x y = do
+    let addr = gfxStart + x `div` 3 + (y `div` 3) * (screenWidth `div` 3)
+    w <- readMemory cpu addr
+    let c1 = w `shiftR` 12
+    let c2 = (w `shiftR` 8) .&. 0xf
+    let idx = x `mod` 3 + (y `mod` 3) * 3
+    let b = w .&. (0x80 `shiftR` idx)
+    writeTexturePixel screen x y (if b /= 0 then c1 else c2)
+
 drawBg :: CpuState -> MV.IOVector Word32 -> IO ()
 drawBg cpu screen = do
-    let yx = [(y, x) | y <- [0..screenHeight-1], x <- [0..screenWidth-1]]
-    forM_ yx (\(y, x) -> do
-        let addr = gfxStart + x `div` 3 + (y `div` 3) * (screenWidth `div` 3)
-        w <- readMemory cpu addr
-        let c1 = w `shiftR` 12
-        let c2 = (w `shiftR` 8) .&. 0xf
-        let idx = x `mod` 3 + (y `mod` 3) * 3
-        let b = w .&. (0x80 `shiftR` idx)
-        writeTexturePixel screen x y (if b /= 0 then c1 else c2)
-        return ())
+    let yx = [(y, x) | y <- [0..screenHeight-1], x <- [0..screenWidth-2]]
+    forM_ yx (\(y, x) -> drawBgPixel cpu screen x y)
+
+drawSprites :: CpuState -> MV.IOVector Word32 -> IO ()
+drawSprites cpu screen = do
+    forM_ [1..spriteCount-1] $ drawSprite cpu screen
+
+data SpriteMode = SpriteMode { width :: Int, height :: Int, bitsPerPixel :: Int }
+
+spriteModes :: [SpriteMode]
+spriteModes = [ SpriteMode 8 8 4
+              , SpriteMode 16 8 2
+              , SpriteMode 8 16 2
+              , SpriteMode 16 16 1]
+
+drawSprite :: CpuState -> MV.IOVector Word32 -> Int -> IO ()    
+drawSprite cpu screen c = do
+    let addr = spritesStart + c * 2
+    w1 :: Int <- fromIntegral <$> readMemory cpu addr
+    w2 :: Int <- fromIntegral <$> (readMemory cpu $ addr + 1)
+    let (sx, sy) = ((w1 `shiftR` 8) - 64, (w1 .&. 0xFF) - 64)
+    let (modeIndex, color) = (w2 `shiftR` 14, (w2 `shiftR` 10) .&. 0xf)
+    let dataAddr = gfxStart + (2 * (w2 .&. 0x3FF))
+    let (SpriteMode width height bitsPerPixel) = spriteModes !! modeIndex
+
+    forM_ [(y, x) | y <- [0..height-1], x <- [0..width-1]] $ \(y, x) -> do
+        let xy = y * width + x
+        let pixelAddr = dataAddr + xy * bitsPerPixel `div` 16
+        w <- readMemory cpu pixelAddr
+        let offs = 16 - bitsPerPixel - (xy * bitsPerPixel) `mod` 16
+        let col = (w `shiftR` offs) .&. ((1 `shiftL` bitsPerPixel) - 1)
+
+        let transparent = if modeIndex == 3 then col == 0 else fromIntegral col == color
+        unless transparent $ do
+            let (rx, ry) = (sx + x, sy + y)
+            when (rx >= 0 && ry >= 0 && rx < screenWidth && ry < screenHeight) $ do
+                writeTexturePixel screen rx ry col
+
+        return ()
+    return ()
 
 updateScreen :: CpuState -> MV.IOVector Word32 -> IO ()
-updateScreen = drawBg
+updateScreen cpu screen = do 
+    drawBg cpu screen
+    drawSprites cpu screen
 
 sizeOfElem :: forall a m. (FS.Storable a) => MV.MVector m a -> Int
 sizeOfElem vec = FS.sizeOf (undefined :: a)
@@ -347,33 +384,35 @@ mainLoop :: IO ()
 mainLoop = do
     SDL.initialize [SDL.InitVideo]
 
-    let windowSize = SDL.V2 (fromIntegral screenWidth) (fromIntegral screenHeight)
+    let windowSize = SDL.V2 (fromIntegral $ screenWidth * screenScale) (fromIntegral $ screenHeight * screenScale)
     let windowConfig = SDL.defaultWindow { SDL.windowInitialSize = windowSize }
     window <- SDL.createWindow "DCPU-16" windowConfig
     SDL.showWindow window
 
     renderer <- SDL.createRenderer window (-1) SDL.defaultRenderer
-    texture <- SDL.createTexture renderer SDL.RGBA8888 SDL.TextureAccessStreaming windowSize
+    texture <- SDL.createTexture renderer SDL.RGBA8888 SDL.TextureAccessStreaming $
+        SDL.V2 (fromIntegral screenWidth) (fromIntegral screenHeight)
 
     cpu <- start
     screenBuf <- MV.new (screenWidth * screenHeight)
-    counter <- newIORef 0 :: IO (IORef Int)
+    counter :: IORef Int <- newIORef 0
 
     let loop = do
             events <- SDL.pollEvents
             let quit = elem SDL.QuitEvent $ map SDL.eventPayload events
-            modifyIORef counter (+1)
             counterValue <- readIORef counter
-            putStrLn $ "Step " ++ show counterValue
             run cpu
-            updateScreen cpu screenBuf
+            when (counterValue `mod` 1000 == 0) $ do
+                putStrLn $ "Step " ++ show (counterValue + 1)
+                updateScreen cpu screenBuf
 
-            let screenBs = mvectorToByteString screenBuf
-            SDL.updateTexture texture Nothing screenBs (fromIntegral $ screenWidth * 4)
+                let screenBs = mvectorToByteString screenBuf
+                SDL.updateTexture texture Nothing screenBs (fromIntegral $ screenWidth * 4)
 
-            SDL.copy renderer texture Nothing Nothing
-            SDL.present renderer
+                SDL.copy renderer texture Nothing Nothing
+                SDL.present renderer
 
+            modifyIORef counter (+1)
             unless quit loop
     loop
 
