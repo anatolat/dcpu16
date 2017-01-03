@@ -330,7 +330,7 @@ drawBg cpu screen = do
 
 drawSprites :: CpuState -> MV.IOVector Word32 -> IO ()
 drawSprites cpu screen = do
-    forM_ [1..spriteCount-1] $ drawSprite cpu screen
+    forM_ [0..spriteCount-1] $ drawSprite cpu screen
 
 data SpriteMode = SpriteMode { width :: Int, height :: Int, bitsPerPixel :: Int }
 
@@ -341,8 +341,8 @@ spriteModes = [ SpriteMode 8 8 4
               , SpriteMode 16 16 1]
 
 drawSprite :: CpuState -> MV.IOVector Word32 -> Int -> IO ()    
-drawSprite cpu screen c = do
-    let addr = spritesStart + c * 2
+drawSprite cpu screen index = do
+    let addr = spritesStart + index * 2
     w1 :: Int <- fromIntegral <$> readMemory cpu addr
     w2 :: Int <- fromIntegral <$> (readMemory cpu $ addr + 1)
     let (sx, sy) = ((w1 `shiftR` 8) - 64, (w1 .&. 0xFF) - 64)
