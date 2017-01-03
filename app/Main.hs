@@ -1,5 +1,6 @@
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE LambdaCase #-}
 module Main where
 
 import qualified Data.Vector.Storable.Mutable as MV
@@ -25,6 +26,8 @@ screenScale = 4   :: Int
 gfxStart = 0x8000
 spritesStart = 0x9050
 spriteCount = 16
+inputStart = 0x9000
+inputMaxCount = 0x10
 
 memorySize = 0x10000
 
@@ -363,9 +366,6 @@ drawSprite cpu screen index = do
             when (rx >= 0 && ry >= 0 && rx < screenWidth && ry < screenHeight) $ do
                 writeTexturePixel screen rx ry col
 
-        return ()
-    return ()
-
 updateScreen :: CpuState -> MV.IOVector Word32 -> IO ()
 updateScreen cpu screen = do 
     drawBg cpu screen
@@ -379,6 +379,29 @@ mvectorToByteString vec
   = BS.fromForeignPtr (FP.castForeignPtr fptr) (scale off) (scale len)  where
     (fptr, off, len) = MV.unsafeToForeignPtr vec
     scale = (* sizeOfElem vec)
+
+updateInput :: CpuState -> IORef Int -> [SDL.EventPayload] -> IO ()
+updateInput cpu pointerRef events = do
+    let codes = concatMap 
+            (\case SDL.KeyboardEvent e | SDL.keyboardEventKeyMotion e == SDL.Pressed ->
+                            case SDL.keysymKeycode (SDL.keyboardEventKeysym e) of
+                                SDL.KeycodeLeft  -> [1]
+                                SDL.KeycodeRight -> [2]
+                                SDL.KeycodeUp    -> [3]
+                                SDL.KeycodeDown  -> [4]
+                                _ -> []
+                   _ -> []) 
+            events
+
+    keyMap <- SDL.getKeyboardState
+
+    forM_ codes $ \code -> do
+        addr <- (+ inputStart) <$> readIORef pointerRef
+        old <- readMemory cpu addr
+        when (old == 0) $ do
+            writeMemory cpu addr $ fromIntegral code
+            modifyIORef pointerRef (\x -> (x + 1) `mod` inputMaxCount)
+    
     
 mainLoop :: IO ()
 mainLoop = do
@@ -395,13 +418,18 @@ mainLoop = do
 
     cpu <- start
     screenBuf <- MV.new (screenWidth * screenHeight)
-    counter :: IORef Int <- newIORef 0
-
+    counterRef :: IORef Int <- newIORef 0
+    keypointerRef :: IORef Int <- newIORef 0
+    
     let loop = do
-            events <- SDL.pollEvents
-            let quit = elem SDL.QuitEvent $ map SDL.eventPayload events
-            counterValue <- readIORef counter
+            events <- map SDL.eventPayload <$> SDL.pollEvents
+            let quit = elem SDL.QuitEvent events
+
+            counterValue <- readIORef counterRef
+
+            updateInput cpu keypointerRef events
             run cpu
+
             when (counterValue `mod` 1000 == 0) $ do
                 putStrLn $ "Step " ++ show (counterValue + 1)
                 updateScreen cpu screenBuf
@@ -412,7 +440,7 @@ mainLoop = do
                 SDL.copy renderer texture Nothing Nothing
                 SDL.present renderer
 
-            modifyIORef counter (+1)
+            modifyIORef counterRef (+1)
             unless quit loop
     loop
 
