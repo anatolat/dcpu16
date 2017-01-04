@@ -71,8 +71,8 @@ id2instrTable =
 lexer = Token.makeTokenParser langDef
   where 
     langDef = emptyDef 
-      { Token.identStart = letter
-      , Token.identLetter = alphaNum
+      { Token.identStart = letter <|> char '_'
+      , Token.identLetter = alphaNum  <|> char '_'
       , Token.commentLine = ";"
       , Token.caseSensitive = False
       }
@@ -84,6 +84,8 @@ parseString :: String -> [AInstr]
 parseString str = case runParser toplevel mkContext "" str of
   Left e -> error $ show e
   Right t -> t
+
+--testAsm = readFile "tests/pacman.dasm16" >>= (return . parseString)
 
 colon = Token.colon lexer
 comma = Token.comma lexer
@@ -100,13 +102,14 @@ name2instr name = lookup (map toUpper name) id2instrTable
 
 instrStmt :: Parser AInstr
 instrStmt = do
-    instr <- ident
+    name <- ident
+    instr <- maybe (unexpected $ "Unknown instruction " ++ name) (return . id) $ name2instr name
     a <- value 
-    comma
-    b <- value
-    maybe (unexpected $ "Unknown instruction " ++ instr)
-         (\x -> return $ AInstr x a b) $
-         name2instr instr
+    b <- case instr of 
+        Jsr -> return $ AValue $ ValueLit 0 -- placeholder value
+        _ -> comma >> value
+    return $ AInstr instr a b
+         
 
 stmt :: Parser AInstr
 stmt = AInstrLabel <$> (colon *> ident)
