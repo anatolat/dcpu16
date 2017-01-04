@@ -1,6 +1,7 @@
 module Dcpu16.Dumper (dump) where
 
 import Dcpu16.Cpu
+import Control.Monad
 import Text.Printf
 
 dumpMemLine :: CpuState -> Int -> IO ()

@@ -8,6 +8,14 @@ import Data.Bits
 import Data.Word
 import Control.Monad
 
+data SpriteMode = SpriteMode { width :: Int, height :: Int, bitsPerPixel :: Int }
+
+spriteModes :: [SpriteMode]
+spriteModes = [ SpriteMode 8 8 4
+              , SpriteMode 16 8 2
+              , SpriteMode 8 16 2
+              , SpriteMode 16 16 1]
+
 pallete :: SV.Vector Word32
 pallete = SV.fromList 
             [ 0x000000FF, 0x1B2632FF, 0x493C2BFF, 0x2F484EFF
@@ -37,14 +45,6 @@ drawBg cpu screen = do
 
 drawSprites :: CpuState -> MV.IOVector Word32 -> IO ()
 drawSprites cpu screen = forM_ [0..spriteCount-1] $ drawSprite cpu screen
-
-data SpriteMode = SpriteMode { width :: Int, height :: Int, bitsPerPixel :: Int }
-
-spriteModes :: [SpriteMode]
-spriteModes = [ SpriteMode 8 8 4
-              , SpriteMode 16 8 2
-              , SpriteMode 8 16 2
-              , SpriteMode 16 16 1]
 
 drawSprite :: CpuState -> MV.IOVector Word32 -> Int -> IO ()    
 drawSprite cpu screen index = do

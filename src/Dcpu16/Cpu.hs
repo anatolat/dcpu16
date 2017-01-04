@@ -5,14 +5,10 @@ module Dcpu16.Cpu where
 
 import Dcpu16.Utils
 import qualified Data.Vector.Storable.Mutable as MV
-import qualified Data.Vector.Storable as SV 
 import Data.Word
 import Data.Bits
 import Control.Monad
 import Control.Applicative ((<$>))
-import Text.Printf
-import qualified Data.ByteString as BS
-import qualified Data.ByteString.Internal as BS
 
 screenWidth = 128 :: Int
 screenHeight = 96 :: Int 
@@ -77,8 +73,8 @@ type InstrItem = (Instr, Value, Value)
 
 regCount = fromEnum (maxBound :: Reg) + 1
 
-newState :: IO CpuState
-newState = do
+newCpu :: IO CpuState
+newCpu = do
     mem <- MV.new memorySize
     regs <- MV.new regCount
     return CpuState {memory = mem, regs = regs }
@@ -244,17 +240,6 @@ evalIfInstr cpu a b op = do
 writeMemoryBlock :: CpuState -> [Word16] -> IO ()
 writeMemoryBlock cpu arr = 
     forM_ (zip [0..] arr) (\(i, w) -> writeMemory cpu i w)
-
-loadBinProg :: CpuState -> FilePath -> IO ()
-loadBinProg cpu path = do  
-    bs <- BS.readFile path
-    writeMemoryBlock cpu $ bytesToWords $ BS.unpack bs
-
-start :: IO CpuState
-start = do
-    cpu <- newState
-    loadBinProg cpu "tests/pacman-1.1.bin"
-    return cpu
 
 run :: CpuState -> IO ()
 run cpu = do

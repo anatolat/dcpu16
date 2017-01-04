@@ -8,10 +8,16 @@ import Dcpu16.Video
 import Dcpu16.Utils
 
 import qualified Data.Vector.Storable.Mutable as MV
-import qualified Data.Vector.Storable as SV 
 import qualified SDL
+import qualified Data.ByteString as BS
 import Data.IORef
 import Control.Monad
+
+loadBinProg :: CpuState -> FilePath -> IO ()
+loadBinProg cpu path = do  
+    bs <- BS.readFile path
+    writeMemoryBlock cpu $ bytesToWords $ BS.unpack bs
+
 
 updateInput :: CpuState -> IORef Int -> [SDL.EventPayload] -> IO ()
 updateInput cpu pointerRef events = do
@@ -25,8 +31,6 @@ updateInput cpu pointerRef events = do
                                 _ -> []
                    _ -> []) 
             events
-
-    keyMap <- SDL.getKeyboardState
 
     forM_ codes $ \code -> do
         addr <- (+ inputStart) <$> readIORef pointerRef
@@ -49,7 +53,9 @@ runEmulatorLoop = do
     texture <- SDL.createTexture renderer SDL.RGBA8888 SDL.TextureAccessStreaming $
         SDL.V2 (fromIntegral screenWidth) (fromIntegral screenHeight)
 
-    cpu <- start
+    cpu <- newCpu
+    loadBinProg cpu "tests/pacman-1.1.bin"
+
     screenBuf <- MV.new (screenWidth * screenHeight)
     counterRef :: IORef Int <- newIORef 0
     keypointerRef :: IORef Int <- newIORef 0
