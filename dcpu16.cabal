@@ -20,13 +20,17 @@ library
                      , Dcpu16.Emulator
                      , Dcpu16.Video
                      , Dcpu16.Dumper
-  other-modules:       Dcpu16.Utils
                      , Dcpu16.Assembler
+                     , Dcpu16.Assembler.Syntax
+                     , Dcpu16.Assembler.Parser
+  other-modules:       Dcpu16.Utils
   build-depends:       base >= 4.7 && < 5
                      , sdl2
                      , vector
                      , bytestring
                      , parsec
+                     , containers
+                     , spool
   default-language:    Haskell2010
 
 executable dcpu16-exe

@@ -6,7 +6,9 @@ module Dcpu16.Emulator (runEmulatorLoop) where
 import Dcpu16.Cpu
 import Dcpu16.Video
 import Dcpu16.Utils
+import Dcpu16.Assembler
 
+import qualified Data.Vector.Storable as SV
 import qualified Data.Vector.Storable.Mutable as MV
 import qualified SDL
 import qualified Data.ByteString as BS
@@ -39,9 +41,8 @@ updateInput cpu pointerRef events = do
             writeMemory cpu addr $ fromIntegral code
             modifyIORef pointerRef (\x -> (x + 1) `mod` inputMaxCount)
     
-    
-runEmulatorLoop :: IO ()
-runEmulatorLoop = do
+runEmulatorLoop :: FilePath -> IO ()
+runEmulatorLoop src = do
     SDL.initialize [SDL.InitVideo]
 
     let windowSize = SDL.V2 (fromIntegral $ screenWidth * screenScale) (fromIntegral $ screenHeight * screenScale)
@@ -54,7 +55,10 @@ runEmulatorLoop = do
         SDL.V2 (fromIntegral screenWidth) (fromIntegral screenHeight)
 
     cpu <- newCpu
-    loadBinProg cpu "tests/pacman-1.1.bin"
+    instrs <- parseFile src
+    cpuImage <- compileInstructions instrs
+    SV.copy (MV.slice 0 (SV.length cpuImage) $ memory cpu) cpuImage
+    --loadBinProg cpu "tests/pacman-1.1.bin"
 
     screenBuf <- MV.new (screenWidth * screenHeight)
     counterRef :: IORef Int <- newIORef 0
@@ -73,7 +77,7 @@ runEmulatorLoop = do
                 putStrLn $ "Step " ++ show (counterValue + 1)
                 updateScreen cpu screenBuf
 
-                let screenBs = mvectorToByteString screenBuf
+                screenBs <- vectorToByteString <$> SV.freeze screenBuf
                 SDL.updateTexture texture Nothing screenBs (fromIntegral $ screenWidth * 4)
 
                 SDL.copy renderer texture Nothing Nothing

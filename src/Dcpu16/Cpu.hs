@@ -35,8 +35,8 @@ data Reg = RegA
          deriving (Show, Bounded, Enum)
 
 data CpuState = CpuState { memory :: MV.IOVector Word16
-                          , regs :: MV.IOVector Word16
-                          }
+                         , regs :: MV.IOVector Word16
+                         }
 
 data Instr = Set
            | Add
@@ -54,7 +54,8 @@ data Instr = Set
            | Ifg
            | Ifb
            | Jsr
-           deriving (Show, Bounded, Enum)
+           | Dat
+           deriving (Show, Enum)
 
 data Value = ValueReg Reg           -- register
            | ValueAddrReg Reg       -- [regiter]
@@ -67,6 +68,7 @@ data Value = ValueReg Reg           -- register
            | ValueO
            | ValueAddr Word16        -- [next word]
            | ValueLit Word16
+           | ValueSymLit Word16
            deriving (Show)
 
 type InstrItem = (Instr, Value, Value)   
@@ -91,8 +93,8 @@ readRegister CpuState {regs = regs} reg = MV.read regs (fromEnum reg)
 writeRegister :: CpuState -> Reg -> Word16 -> IO ()
 writeRegister CpuState {regs = regs} reg = MV.write regs (fromEnum reg)
 
-stepPC :: CpuState -> IO Word16
-stepPC cpu = do
+incPC :: CpuState -> IO Word16
+incPC cpu = do
     addr <- readRegister cpu RegPC
     result <- readMemory cpu (fromIntegral addr)
     writeRegister cpu RegPC (addr + 1)
@@ -107,7 +109,7 @@ parseInstrParts w = if oo == 0 then (aa + 0xf, bb, 0) else (oo, aa, bb)
 
 withNextWord :: CpuState -> (Word16 -> a) -> IO a
 withNextWord cpu f = do
-    w <- stepPC cpu
+    w <- incPC cpu
     return $ f w
 
 readValue :: CpuState -> Word16 -> IO Value
@@ -130,7 +132,7 @@ readValue cpu w = do
 
 readInstr :: CpuState -> IO InstrItem
 readInstr cpu = do
-    w <- stepPC cpu
+    w <- incPC cpu
     let (oo, aa, bb) = parseInstrParts w
     let instr = toEnum (fromIntegral $ oo - 1) :: Instr
     a <- readValue cpu aa
@@ -163,6 +165,7 @@ getValue cpu ValuePC = readRegister cpu RegPC
 getValue cpu ValueO = readRegister cpu RegEx
 getValue cpu (ValueAddr addr) = readMemory cpu (fromIntegral addr)
 getValue cpu (ValueLit lit) = return lit
+getValue cpu (ValueSymLit lit) = return lit
 
 setValue :: CpuState -> Value -> Word16 -> IO ()
 setValue cpu (ValueReg reg) v = writeRegister cpu reg v
@@ -190,6 +193,7 @@ setValue cpu ValuePC v = writeRegister cpu RegPC v
 setValue cpu ValueO  v = writeRegister cpu RegEx  v
 setValue cpu (ValueAddr addr) v = writeMemory cpu (fromIntegral addr) v
 setValue cpu (ValueLit lit) v = return () -- TODO: warn
+setValue cpu (ValueSymLit lit) v = return () -- TODO: warn
 
 evalInstr :: CpuState -> InstrItem -> IO ()
 evalInstr cpu (Set, dst, src) = do
@@ -222,6 +226,7 @@ evalInstr cpu (Ifb, a, b) = evalIfInstr cpu a b (\a b -> (a .&. b) /= 0)
 evalInstr cpu (Jsr, a, _) = do
     evalInstr cpu (Set, ValuePush, ValuePC)
     evalInstr cpu (Set, ValuePC, a)
+evalInstr cpu (Dat, _, _)  = return ()
 
 evalArithInstr :: CpuState -> Value -> Value -> (Int -> Int -> (Int, Int)) -> IO ()
 evalArithInstr cpu a b op = do

@@ -1,171 +1,109 @@
-module Dcpu16.Assembler where
+module Dcpu16.Assembler 
+    ( module Dcpu16.Assembler.Syntax
+    , module Dcpu16.Assembler.Parser
+    , compileFile
+    , compileFileToVec
+    , compileInstructions
+    ) where
 
 import Dcpu16.Cpu
-import Text.Parsec
-import Text.Parsec.Language (emptyDef)
+import Dcpu16.Utils
+import Dcpu16.Assembler.Syntax
+import Dcpu16.Assembler.Parser
 import Data.Word
-import Data.Char
-import qualified Control.Applicative as A
+import Data.List (foldl')
+import Control.Monad (foldM_)
+import Data.Bits
+import qualified Data.Map.Strict as Map
+import qualified Data.Vector.Storable.Mutable as MV
+import qualified Data.Vector.Storable as SV
 
-import qualified Text.Parsec.Token as Token
+buildLabelMap :: [AInstr] -> (Map.Map String Int, Int)
+buildLabelMap instrs = foldl' go (Map.empty, 0) instrs
+    where 
+        go (mp, offs) (AInstrLabel sym) = (Map.insert sym offs mp, offs)
+        go (mp, offs) instr = (mp, offs + asmInstrSize instr)
 
-type Context = [(String, Int)] -- collect labels & 
+resolveAsmValue :: AValue -> Map.Map String Int -> Value
+resolveAsmValue (AValue value) _ = value
+resolveAsmValue (AValueSym value) labelMap = 
+    ValueSymLit $ fromIntegral $ labelMap Map.! value
+resolveAsmValue (AValueSymAddr value) labelMap = 
+    ValueAddr $ fromIntegral $ labelMap Map.! value
+resolveAsmValue (AValueSymAddrPlusLit label w) labelMap = 
+    ValueSymLit $ (fromIntegral $ labelMap Map.! label) + w
+resolveAsmValue (AValueSymAddrPlusReg label reg) labelMap =
+    ValueAddrRegPlus reg $ fromIntegral $ labelMap Map.! label
+    
+resolveAsmInstruction :: AInstr -> Map.Map String Int -> [InstrItem]
+resolveAsmInstruction (AInstr instr a b) labelMap = [(instr, resolveAsmValue a labelMap, resolveAsmValue b labelMap)]
+resolveAsmInstruction (AInstrDat ws) _ = map (\w -> (Dat, ValueLit w, ValueLit 0)) ws 
+resolveAsmInstruction (AInstrLabel _) _ = []
 
-type Parser = Parsec String Context
+resolveAsmInstructions :: [AInstr] -> Map.Map String Int -> [InstrItem]
+resolveAsmInstructions asmInstrs labelMap = concatMap (\i -> resolveAsmInstruction i labelMap) asmInstrs
 
-data AValue = AValue Value
-            | AValueSym String      -- symbol
-            | AValueSymAddr String  -- [symbol]
-            | AValueSymAddrPlusLit String Word16 -- [symbol + lit]
-            | AValueSymAddrPlusReg String Reg -- [symbol + reg]
-            deriving (Show)
+compileValue :: Value -> MV.IOVector Word16 -> Int -> IO (Word16, Int)
+compileValue (ValueReg reg) _ ptr = return (wreg, ptr)
+    where wreg = fromIntegral $ fromEnum reg
+compileValue (ValueAddrReg reg) _ ptr = return (wreg + 0x08, ptr)
+    where wreg = fromIntegral $ fromEnum reg
+compileValue (ValueAddrRegPlus reg nw) buf ptr = do
+    let wreg = fromIntegral $ fromEnum reg 
+    MV.write buf ptr nw
+    return (wreg + 0x10, ptr + 1) 
+compileValue ValuePop _ ptr = return (0x18, ptr)
+compileValue ValuePeek _ ptr = return (0x19, ptr)
+compileValue ValuePush _ ptr = return (0x1a, ptr)
+compileValue ValueSP _ ptr = return (0x1b, ptr)
+compileValue ValuePC _ ptr = return (0x1c, ptr)
+compileValue ValueO _ ptr = return (0x1d, ptr)
+compileValue (ValueAddr nw) buf ptr = do
+    MV.write buf ptr nw
+    return (0x1e, ptr + 1) 
+compileValue (ValueLit nw) buf ptr = 
+    if nw <= 0x1f 
+        then return (0x20 + nw, ptr)
+        else MV.write buf ptr nw >> return (0x1f, ptr + 1)
+compileValue (ValueSymLit nw) buf ptr = do
+    MV.write buf ptr nw
+    return (0x1f, ptr + 1)
 
-data AInstr = AInstr Instr AValue AValue
-            | AInstrDat [Word16]
-            | AInstrLabel String
-            deriving (Show)
+compileInstr :: InstrItem -> MV.IOVector Word16 -> Int -> IO Int
+compileInstr (Dat, a@(ValueLit w), _) buf ptr = do
+    putStrLn $ "compile Dat " ++ show a
+    MV.write buf ptr w
+    return $ ptr + 1
+-- a non-basic insruction format: aaaaaaoooooo0000
+compileInstr (Jsr, a, _) buf ptr = do
+    putStrLn $ "compile Jsr " ++ show a
+    (wa, ptr') <- compileValue a buf $ ptr + 1
+    let wop = fromIntegral $ fromEnum 1
+    let w = (wa `shiftL` 10) .|. (wop `shiftL` 4)
+    MV.write buf ptr w
+    return $ ptr'
+-- a basic instruction format:    bbbbbbaaaaaaoooo    
+compileInstr (instr, a, b) buf ptr = do
+    putStrLn $ "compile " ++ show instr ++ " " ++ show a ++ ", " ++ show b
+    (wa, ptr') <- compileValue a buf $ ptr + 1
+    (wb, ptr'') <- compileValue b buf $ ptr'
+    let wop = fromIntegral $ fromEnum instr + 1
+    let w = wop .|. (wa `shiftL` 4) .|. (wb `shiftL` 10)
+    MV.write buf ptr w
+    return $ ptr''
 
+compileInstructions :: [AInstr] -> IO (SV.Vector Word16)
+compileInstructions asmInstrs = do
+    let (labelMap, size) = buildLabelMap asmInstrs
+    let instrs = resolveAsmInstructions asmInstrs labelMap
+    buf <- MV.new size
+    foldM_ (\ptr instr -> compileInstr instr buf ptr) 0 instrs
+    SV.unsafeFreeze buf
 
-id2regTable = 
-    [ ("A", RegA)
-    , ("B", RegB)
-    , ("C", RegC)
-    , ("X", RegX)
-    , ("Y", RegY)
-    , ("Z", RegZ)
-    , ("I", RegI)
-    , ("J", RegJ)
-    , ("PC", RegPC)
-    , ("SP", RegSP)
-    , ("O", RegEx)
-    ]
+compileFileToVec :: FilePath -> IO (SV.Vector Word16)
+compileFileToVec src = parseFile src >>= compileInstructions
 
-id2valueTable = 
-    [ ("POP", ValuePop)
-    , ("PEEK", ValuePeek)
-    , ("PUSH", ValuePush)
-    , ("PC", ValuePC)
-    , ("SP", ValueSP)
-    , ("O", ValueO)
-    ]
-
-id2instrTable = 
-    [ ("SET", Set)
-    , ("ADD", Add)
-    , ("SUB", Sub)
-    , ("MUL", Mul)
-    , ("DIV", Div)
-    , ("MOD", Mod)
-    , ("SHL", Shl)
-    , ("SHR", Shr)
-    , ("AND", And)
-    , ("BOR", Bor)
-    , ("XOR", Xor)
-    , ("IFE", Ife)
-    , ("IFN", Ifn)
-    , ("IFG", Ifg)
-    , ("IFB", Ifb)
-    , ("JSR", Jsr)
-    ]
-
-lexer = Token.makeTokenParser langDef
-  where 
-    langDef = emptyDef 
-      { Token.identStart = letter <|> char '_'
-      , Token.identLetter = alphaNum  <|> char '_'
-      , Token.commentLine = ";"
-      , Token.caseSensitive = False
-      }
-
-mkContext :: Context
-mkContext = []
-
-parseString :: String -> [AInstr]
-parseString str = case runParser toplevel mkContext "" str of
-  Left e -> error $ show e
-  Right t -> t
-
---testAsm = readFile "tests/pacman.dasm16" >>= (return . parseString)
-
-colon = Token.colon lexer
-comma = Token.comma lexer
-ident = Token.identifier lexer
-
-toplevel :: Parser [AInstr]
-toplevel = Token.whiteSpace lexer *> many stmt <* eof 
-
-datStmt :: Parser AInstr
-datStmt = AInstrDat <$> (Token.reserved lexer "dat" *> Token.commaSep1 lexer literal)
-
-name2instr :: String -> Maybe Instr
-name2instr name = lookup (map toUpper name) id2instrTable
-
-instrStmt :: Parser AInstr
-instrStmt = do
-    name <- ident
-    instr <- maybe (unexpected $ "Unknown instruction " ++ name) (return . id) $ name2instr name
-    a <- value 
-    b <- case instr of 
-        Jsr -> return $ AValue $ ValueLit 0 -- placeholder value
-        _ -> comma >> value
-    return $ AInstr instr a b
-         
-
-stmt :: Parser AInstr
-stmt = AInstrLabel <$> (colon *> ident)
-    <|> datStmt
-    <|> instrStmt
-    <?> "stmt"
-
-literal :: Parser Word16
-literal = fromIntegral <$> (Token.integer lexer)
-
-value :: Parser AValue
-value = term False
-     <|> Token.brackets lexer (term True)
-     <?> "value"
-
-toAddrValue :: AValue -> Maybe AValue
-toAddrValue (AValue (ValueReg r)) = Just $ AValue $ ValueAddrReg r
-toAddrValue (AValue (ValueLit v)) = Just $ AValue $ ValueAddr v
-toAddrValue (AValueSym v) = Just $AValueSymAddr v
-toAddrValue _ = Nothing
-
-sumValues :: AValue -> AValue -> Maybe AValue
-sumValues (AValue (ValueLit a)) (AValue (ValueLit b)) = Just $ AValue $ ValueLit $ a + b
-sumValues _ _ = Nothing
-
-sumAddrValues' :: AValue -> AValue -> Maybe AValue
-sumAddrValues' (AValue (ValueLit a)) (AValue (ValueLit b)) = Just $ AValue $ ValueAddr $ a + b
-sumAddrValues' (AValue (ValueReg a)) (AValue (ValueLit b)) = Just $ AValue $ ValueAddrRegPlus a b
-sumAddrValues' (AValueSym a) (AValue (ValueLit b)) = Just $ AValueSymAddrPlusLit a b
-sumAddrValues' (AValueSym a) (AValue (ValueReg b)) = Just $ AValueSymAddrPlusReg a b
-sumAddrValues' _ _ = Nothing
-
-sumAddrValues :: AValue -> AValue -> Maybe AValue
-sumAddrValues a b = sumAddrValues' a b A.<|> sumAddrValues b a
-
-term :: Bool -> Parser AValue
-term addr = do
-    values <- sepBy1 atom (Token.reservedOp lexer "+")
-    let v = case  values of
-                [x] | addr -> toAddrValue x
-                [x] -> Just x
-                [x, y] | addr -> sumAddrValues x y
-                [x, y] -> sumValues x y
-                _ -> Nothing
-
-    maybe (unexpected "Unexpected term") (return . id) v
-
-name2value :: String -> AValue
-name2value name' =
-    case (lookup name id2valueTable, lookup name id2regTable) of
-        (Just v, _) -> AValue v
-        (Nothing, Just reg) -> AValue $ ValueReg reg
-        (Nothing, Nothing) -> AValueSym name
-    where name = map toUpper name'
-
-atom :: Parser AValue
-atom = (AValue . ValueLit) <$> literal
-    <|> name2value <$> ident
-    <?> "atom value"
+compileFile :: FilePath -> FilePath -> IO ()
+compileFile src dst = do
+    vec <- compileFileToVec src
+    writeVectorToFile vec dst
