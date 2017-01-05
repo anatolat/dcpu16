@@ -19,6 +19,7 @@ import qualified SDL
 import qualified Data.ByteString as BS
 import Data.IORef
 import Control.Monad
+import Control.Concurrent (threadDelay)
 
 data Emulator = Emulator { cpu :: CpuState }
 
@@ -81,6 +82,7 @@ runEmulatorLoop Emulator {cpu = cpu} = do
             counterValue <- readIORef counterRef
             when (counterValue `mod` 1000 == 0) $ do
                 --putStrLn $ "Step " ++ show (counterValue + 1)
+                threadDelay 8000
                 updateScreen cpu screenBuf
 
                 screenBs <- vectorToByteString <$> SV.freeze screenBuf
