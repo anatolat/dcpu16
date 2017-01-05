@@ -5,10 +5,10 @@ description:         Please see README.md
 homepage:            https://github.com/githubuser/dcpu16#readme
 license:             BSD3
 license-file:        LICENSE
-author:              Author name here
+author:              Anatoly Krivolapov
 maintainer:          example@example.com
-copyright:           2016 Author name here
-category:            Web
+copyright:           2016 Anatoly Krivolapov
+category:            Compilers/Interpreters
 build-type:          Simple
 extra-source-files:  README.md
 cabal-version:       >=1.10
@@ -52,4 +52,4 @@ test-suite dcpu16-test
 
 source-repository head
   type:     git
-  location: https://github.com/githubuser/dcpu16
+  location: https://github.com/anatolat/dcpu16
