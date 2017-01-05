@@ -1,9 +1,6 @@
-module Dcpu16 
-    ( module Dcpu16.Emulator
-    , module Dcpu16.Cpu
-    , module Dcpu16.Dumper
-    ) where
+module Dcpu16 (module X) where
 
-import Dcpu16.Emulator
-import Dcpu16.Cpu
-import Dcpu16.Dumper
+import Dcpu16.Emulator as X
+import Dcpu16.Cpu as X
+import Dcpu16.Dumper as X
+import Dcpu16.Assembler as X

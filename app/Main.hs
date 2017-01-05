@@ -1,7 +1,9 @@
 module Main where
 
 import Dcpu16
-import Dcpu16.Assembler
 
 main :: IO ()
-main = runEmulatorLoop "tests/pacman.dasm16"
+main = do
+    emu <- newEmulator
+    loadAsmProgram emu "tests/pacman.dasm16"
+    runEmulatorLoop emu

@@ -1,7 +1,12 @@
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE LambdaCase #-}
-module Dcpu16.Emulator (runEmulatorLoop) where
+module Dcpu16.Emulator 
+    ( newEmulator
+    , loadBinaryProgram
+    , loadAsmProgram
+    , runEmulatorLoop
+    ) where
 
 import Dcpu16.Cpu
 import Dcpu16.Video
@@ -15,11 +20,7 @@ import qualified Data.ByteString as BS
 import Data.IORef
 import Control.Monad
 
-loadBinProg :: CpuState -> FilePath -> IO ()
-loadBinProg cpu path = do  
-    bs <- BS.readFile path
-    writeMemoryBlock cpu $ bytesToWords $ BS.unpack bs
-
+data Emulator = Emulator { cpu :: CpuState }
 
 updateInput :: CpuState -> IORef Int -> [SDL.EventPayload] -> IO ()
 updateInput cpu pointerRef events = do
@@ -39,10 +40,22 @@ updateInput cpu pointerRef events = do
         old <- readMemory cpu addr
         when (old == 0) $ do
             writeMemory cpu addr $ fromIntegral code
-            modifyIORef pointerRef (\x -> (x + 1) `mod` inputMaxCount)
+            modifyIORef' pointerRef (\x -> (x + 1) `mod` inputMaxCount)
+
+newEmulator :: IO Emulator
+newEmulator = Emulator <$> newCpu
+
+loadBinaryProgram :: Emulator -> FilePath -> IO ()
+loadBinaryProgram Emulator {cpu = cpu} path = do  
+    bs <- BS.readFile path
+    writeMemoryData cpu $ byteStringToVector bs
+
+loadAsmProgram :: Emulator -> FilePath -> IO ()
+loadAsmProgram Emulator {cpu = cpu} src = 
+    compileFileToVec src >>= writeMemoryData cpu
     
-runEmulatorLoop :: FilePath -> IO ()
-runEmulatorLoop src = do
+runEmulatorLoop :: Emulator -> IO ()
+runEmulatorLoop Emulator {cpu = cpu} = do
     SDL.initialize [SDL.InitVideo]
 
     let windowSize = SDL.V2 (fromIntegral $ screenWidth * screenScale) (fromIntegral $ screenHeight * screenScale)
@@ -54,12 +67,6 @@ runEmulatorLoop src = do
     texture <- SDL.createTexture renderer SDL.RGBA8888 SDL.TextureAccessStreaming $
         SDL.V2 (fromIntegral screenWidth) (fromIntegral screenHeight)
 
-    cpu <- newCpu
-    instrs <- parseFile src
-    cpuImage <- compileInstructions instrs
-    SV.copy (MV.slice 0 (SV.length cpuImage) $ memory cpu) cpuImage
-    --loadBinProg cpu "tests/pacman-1.1.bin"
-
     screenBuf <- MV.new (screenWidth * screenHeight)
     counterRef :: IORef Int <- newIORef 0
     keypointerRef :: IORef Int <- newIORef 0
@@ -68,13 +75,12 @@ runEmulatorLoop src = do
             events <- map SDL.eventPayload <$> SDL.pollEvents
             let quit = SDL.QuitEvent `elem` events
 
-            counterValue <- readIORef counterRef
-
             updateInput cpu keypointerRef events
-            run cpu
+            runNextInstruction cpu
 
+            counterValue <- readIORef counterRef
             when (counterValue `mod` 1000 == 0) $ do
-                putStrLn $ "Step " ++ show (counterValue + 1)
+                --putStrLn $ "Step " ++ show (counterValue + 1)
                 updateScreen cpu screenBuf
 
                 screenBs <- vectorToByteString <$> SV.freeze screenBuf
@@ -83,7 +89,7 @@ runEmulatorLoop src = do
                 SDL.copy renderer texture Nothing Nothing
                 SDL.present renderer
 
-            modifyIORef counterRef (+1)
+            modifyIORef' counterRef (+1)
             unless quit loop
     loop
 

@@ -89,7 +89,7 @@ name2instr name = lookup (map toUpper name) id2instrTable
 instrStmt :: Parser AInstr
 instrStmt = do
     name <- ident
-    instr <- maybe (unexpected $ "Unknown instruction " ++ name) (return . id) $ name2instr name
+    instr <- maybe (unexpected $ "Unknown instruction " ++ name) return $ name2instr name
     a <- value 
     b <- case instr of 
         Jsr -> return $ AValue $ ValueLit 0 -- placeholder value
@@ -103,7 +103,7 @@ stmt = (AInstrLabel . map toUpper) <$> (colon *> ident)
     <?> "stmt"
 
 literal :: Parser Word16
-literal = fromIntegral <$> (Token.integer lexer)
+literal = fromIntegral <$> Token.integer lexer
 
 value :: Parser AValue
 value = term False
@@ -140,7 +140,7 @@ term addr = do
                 [x, y] -> sumValues x y
                 _ -> Nothing
 
-    maybe (unexpected "Unexpected term") (return . id) v
+    maybe (unexpected "Unexpected term") return v
 
 name2value :: String -> AValue
 name2value name' =

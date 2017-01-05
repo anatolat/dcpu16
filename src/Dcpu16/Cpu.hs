@@ -3,7 +3,7 @@
 {-# LANGUAGE LambdaCase #-}
 module Dcpu16.Cpu where
 
-import Dcpu16.Utils
+import qualified Data.Vector.Storable as SV
 import qualified Data.Vector.Storable.Mutable as MV
 import Data.Word
 import Data.Bits
@@ -164,8 +164,8 @@ getValue cpu ValueSP = readRegister cpu RegSP
 getValue cpu ValuePC = readRegister cpu RegPC
 getValue cpu ValueO = readRegister cpu RegEx
 getValue cpu (ValueAddr addr) = readMemory cpu (fromIntegral addr)
-getValue cpu (ValueLit lit) = return lit
-getValue cpu (ValueSymLit lit) = return lit
+getValue _ (ValueLit lit) = return lit
+getValue _ (ValueSymLit lit) = return lit
 
 setValue :: CpuState -> Value -> Word16 -> IO ()
 setValue cpu (ValueReg reg) v = writeRegister cpu reg v
@@ -192,8 +192,8 @@ setValue cpu ValueSP v = writeRegister cpu RegSP v
 setValue cpu ValuePC v = writeRegister cpu RegPC v
 setValue cpu ValueO  v = writeRegister cpu RegEx  v
 setValue cpu (ValueAddr addr) v = writeMemory cpu (fromIntegral addr) v
-setValue cpu (ValueLit lit) v = return () -- TODO: warn
-setValue cpu (ValueSymLit lit) v = return () -- TODO: warn
+setValue _ (ValueLit _) _ = return () -- TODO: warn
+setValue _ (ValueSymLit _) _ = return () -- TODO: warn
 
 evalInstr :: CpuState -> InstrItem -> IO ()
 evalInstr cpu (Set, dst, src) = do
@@ -226,7 +226,7 @@ evalInstr cpu (Ifb, a, b) = evalIfInstr cpu a b (\a b -> (a .&. b) /= 0)
 evalInstr cpu (Jsr, a, _) = do
     evalInstr cpu (Set, ValuePush, ValuePC)
     evalInstr cpu (Set, ValuePC, a)
-evalInstr cpu (Dat, _, _)  = return ()
+evalInstr _ (Dat, _, _)  = return ()
 
 evalArithInstr :: CpuState -> Value -> Value -> (Int -> Int -> (Int, Int)) -> IO ()
 evalArithInstr cpu a b op = do
@@ -242,11 +242,10 @@ evalIfInstr cpu a b op = do
     bb <- getValue cpu b
     unless (op aa bb) $ void $ readInstr cpu
 
-writeMemoryBlock :: CpuState -> [Word16] -> IO ()
-writeMemoryBlock cpu arr = 
-    forM_ (zip [0..] arr) (\(i, w) -> writeMemory cpu i w)
+writeMemoryData :: CpuState -> SV.Vector Word16 -> IO ()
+writeMemoryData cpu vec = SV.copy (MV.slice 0 (SV.length vec) $ memory cpu) vec
 
-run :: CpuState -> IO ()
-run cpu = do
+runNextInstruction :: CpuState -> IO ()
+runNextInstruction cpu = do
     instr <- readInstr cpu
     evalInstr cpu instr    
