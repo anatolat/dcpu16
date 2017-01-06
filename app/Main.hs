@@ -1,9 +1,25 @@
 module Main where
 
-import Dcpu16
+import qualified Dcpu16 as D
+import System.FilePath (takeExtension)
+import Options.Applicative
+import Data.Char
+
+data Opts = Opts { prog :: String }
+
+opts :: Parser Opts
+opts = Opts <$> argument str (metavar "PROG" <> help "assembler or binary program" )
 
 main :: IO ()
-main = do
-    emu <- newEmulator
-    loadAsmProgram emu "tests/pacman.dasm16"
-    runEmulatorLoop emu
+main = do 
+    (Opts prog) <- execParser fullOpts
+    emu <- D.newEmulator
+    let isAsm = map toLower (takeExtension prog) `elem` [".asm", ".dasm16"]
+    if isAsm
+        then do putStrLn $ "Loading asm program " ++ prog
+                D.loadAsmProgram emu prog
+        else do putStrLn $ "Loading binary program " ++ prog
+                D.loadBinaryProgram emu prog
+    D.runEmulatorLoop emu
+  where
+    fullOpts = info (helper <*> opts) (fullDesc <> progDesc "DCPU-16 Emulator")
