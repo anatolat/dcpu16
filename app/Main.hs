@@ -2,7 +2,8 @@ module Main where
 
 import qualified Dcpu16 as D
 import System.FilePath (takeExtension)
-import Options.Applicative
+import Options.Applicative hiding ((<>))
+import Data.Monoid ((<>))
 import Data.Char
 
 data Opts = Opts { prog :: String }
